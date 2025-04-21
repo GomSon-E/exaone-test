@@ -5,24 +5,6 @@ import requests
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 from huggingface_hub.utils import logging
 
-# 네트워크 연결 문제를 해결하기 위한 설정
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"  # 더 안정적인 전송 방식 활성화
-os.environ["REQUESTS_CA_BUNDLE"] = ""  # SSL 인증서 문제 우회
-os.environ["TRANSFORMERS_VERBOSITY"] = "info"  # 디버깅을 위한 자세한 로그
-
-# 세션 타임아웃 증가
-session = requests.Session()
-session.mount('https://', requests.adapters.HTTPAdapter(
-    max_retries=5,  # 재시도 횟수
-    pool_connections=10,
-    pool_maxsize=10,
-    pool_block=True)
-)
-# 타임아웃 설정 (연결 타임아웃, 읽기 타임아웃)
-session.request = lambda method, url, **kwargs: requests.Session.request(
-    session, method, url, timeout=(30, 300), **kwargs)
-
-logging.set_verbosity_warning()  # 로깅 레벨 조정
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -73,19 +55,15 @@ print(f"{model_name} 모델 로드 중... (큰 모델이므로 시간이 소요�
 # 토크나이저 로드
 tokenizer = AutoTokenizer.from_pretrained(
     model_name,
-    trust_remote_code=True,
-    use_fast=False,  # 안정성을 위해 Fast Tokenizer 비활성화
-    local_files_only=False  # 처음에는 온라인 시도
+    trust_remote_code=True
 )
 
 # 모델 로드
 model = AutoModelForCausalLM.from_pretrained(
-    model_name, 
+    model_name,
     torch_dtype=torch.float16,
     device_map="auto",
-    trust_remote_code=True,
-    revision="main",  # 명시적으로 메인 브랜치 사용
-    low_cpu_mem_usage=True  # 메모리 사용량 최적화
+    trust_remote_code=True
 )
 
 # 6. LLM 파이프라인 설정
