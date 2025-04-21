@@ -87,53 +87,49 @@ def generate_streaming_answer(prompt, max_new_tokens=200, temperature=0.7):
     attention_mask = inputs.attention_mask
     prev_input_len = inputs.input_ids.shape[1]
     
+    # 답변 시작을 표시
     print("\n답변: ", end="")
     sys.stdout.flush()
     
-    # 첫 번째 토큰 생성
-    with torch.no_grad():
-        generated_ids = model.generate(
-            inputs.input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=1,
-            do_sample=True,
-            temperature=temperature,
-            pad_token_id=tokenizer.eos_token_id
-        )
+    # 생성된 토큰을 담을 리스트
+    generated_tokens = []
+    generated_ids = inputs.input_ids
     
-    generated_text = tokenizer.decode(generated_ids[0][prev_input_len:], skip_special_tokens=True)
-    sys.stdout.write(generated_text)
-    sys.stdout.flush()
-    
-    # 나머지 토큰 생성
-    for i in range(max_new_tokens - 1):
-        # 이전 출력을 새 입력으로 사용
+    # 토큰 생성 및 실시간 출력
+    for i in range(max_new_tokens):
+        # 다음 토큰 생성
         with torch.no_grad():
-            next_token_ids = model.generate(
+            outputs = model(
                 generated_ids,
-                max_new_tokens=1,
-                do_sample=True,
-                temperature=temperature,
-                pad_token_id=tokenizer.eos_token_id
+                attention_mask=torch.ones_like(generated_ids),
+                return_dict=True
             )
-        
-        # 마지막에 생성된 토큰만 가져오기
-        next_token = next_token_ids[0][-1].unsqueeze(0)
-        
-        # 토큰 디코딩
-        next_token_text = tokenizer.decode(next_token, skip_special_tokens=True)
-        
-        # 생성된 텍스트 출력
-        sys.stdout.write(next_token_text)
-        sys.stdout.flush()
-        
-        # 생성된 ID 업데이트
-        generated_ids = next_token_ids
-        
-        # EOS 토큰이 생성되면 중단
-        if next_token.item() == tokenizer.eos_token_id:
-            break
             
+            next_token_logits = outputs.logits[:, -1, :]
+            
+            # 샘플링 (temperature 적용)
+            if temperature > 0:
+                next_token_logits = next_token_logits / temperature
+                
+            # Top-p 샘플링
+            probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
+            
+            # 토큰 추가
+            generated_ids = torch.cat([generated_ids, next_token], dim=-1)
+            
+            # 토큰 디코딩
+            next_token_text = tokenizer.decode(next_token[0], skip_special_tokens=True)
+            generated_tokens.append(next_token[0].item())
+            
+            # 실시간 출력
+            sys.stdout.write(next_token_text)
+            sys.stdout.flush()
+            
+            # EOS 토큰이 생성되면 중단
+            if next_token.item() == tokenizer.eos_token_id:
+                break
+    
     print("\n")
     return
 
@@ -154,7 +150,7 @@ def answer_with_rag_streaming(query, k=3, max_tokens=300, temperature=0.5):
 
 답변:"""
     
-    print("답변 생성 중...")
+    # "답변 생성 중..." 메시지 출력하지 않고 바로 스트리밍 시작
     generate_streaming_answer(prompt, max_new_tokens=max_tokens, temperature=temperature)
 
 # 9. 실행 함수
