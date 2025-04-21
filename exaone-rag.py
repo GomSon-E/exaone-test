@@ -2,7 +2,7 @@ import os
 import torch
 import sys
 import time
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, TextStreamer
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -11,8 +11,7 @@ from langchain_community.vectorstores import FAISS
 # PDF 파일 경로 설정
 pdf_paths = [
     "doc1.pdf",
-    "doc2.pdf",
-    "doc3.pdf"
+    "doc2.pdf"
 ]
 
 print("RAG 시스템 초기화 중...")
@@ -63,77 +62,72 @@ tokenizer = AutoTokenizer.from_pretrained(
     trust_remote_code=True
 )
 
-# 모델 로드
+# 모델 로드 - 성능 최적화 설정
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
-    torch_dtype=torch.float16,
-    device_map="auto",
-    trust_remote_code=True
+    torch_dtype=torch.float16,  # 정밀도 낮추기 (속도 향상)
+    device_map="auto",          # 자동 장치 할당
+    trust_remote_code=True,
+    low_cpu_mem_usage=True      # CPU 메모리 사용량 최적화
 )
 print("EXAONE 모델 로드 완료!")
 
-# 6. RAG 검색 함수
+# 6. 커스텀 TextStreamer 클래스 정의 - 수정된 부분
+class FastTextStreamer(TextStreamer):
+    """최적화된 텍스트 스트리밍 클래스"""
+
+    def __init__(self, tokenizer, skip_prompt=False, **decode_kwargs):
+        super().__init__(tokenizer, skip_prompt=skip_prompt, **decode_kwargs)
+        self.prefix = "\n답변: "
+        self.printed_prefix = False
+
+    def on_finalized_text(self, text, stream_end=False):
+        if not self.printed_prefix:
+            print(self.prefix, end="")
+            self.printed_prefix = True
+
+        # 생성된 텍스트 출력
+        print(text, end="", flush=True)
+
+# 7. RAG 검색 함수
 def retrieve_context(query, k=3):
     """쿼리와 관련된 문서를 검색하여 컨텍스트를 생성합니다."""
     relevant_docs = vectorstore.similarity_search(query, k=k)
     context = "\n\n".join([doc.page_content for doc in relevant_docs])
     return context
 
-# 7. 스트리밍 응답 생성 함수
+# 8. 최적화된 스트리밍 응답 생성 함수
 def generate_streaming_answer(prompt, max_new_tokens=200, temperature=0.7):
-    """프롬프트에 대한 응답을 스트리밍 방식으로 생성합니다."""
+    """프롬프트에 대한 응답을 최적화된 스트리밍 방식으로 생성합니다."""
     # 입력 인코딩
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    attention_mask = inputs.attention_mask
-    prev_input_len = inputs.input_ids.shape[1]
 
-    # 답변 시작을 표시
-    print("\n답변: ", end="")
-    sys.stdout.flush()
+    # 스트리머 준비
+    streamer = FastTextStreamer(tokenizer, skip_prompt=True)
 
-    # 생성된 토큰을 담을 리스트
-    generated_tokens = []
-    generated_ids = inputs.input_ids
+    # 효율적인 생성 설정
+    generation_config = {
+        "max_new_tokens": max_new_tokens,
+        "do_sample": True if temperature > 0 else False,
+        "temperature": temperature,
+        "top_p": 0.92,
+        "top_k": 50,
+        "repetition_penalty": 1.1,
+        "pad_token_id": tokenizer.eos_token_id,
+    }
 
-    # 토큰 생성 및 실시간 출력
-    for i in range(max_new_tokens):
-        # 다음 토큰 생성
-        with torch.no_grad():
-            outputs = model(
-                generated_ids,
-                attention_mask=torch.ones_like(generated_ids),
-                return_dict=True
-            )
-
-            next_token_logits = outputs.logits[:, -1, :]
-
-            # 샘플링 (temperature 적용)
-            if temperature > 0:
-                next_token_logits = next_token_logits / temperature
-
-            # Top-p 샘플링
-            probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)
-
-            # 토큰 추가
-            generated_ids = torch.cat([generated_ids, next_token], dim=-1)
-
-            # 토큰 디코딩
-            next_token_text = tokenizer.decode(next_token[0], skip_special_tokens=True)
-            generated_tokens.append(next_token[0].item())
-
-            # 실시간 출력
-            sys.stdout.write(next_token_text)
-            sys.stdout.flush()
-
-            # EOS 토큰이 생성되면 중단
-            if next_token.item() == tokenizer.eos_token_id:
-                break
+    # 토큰 생성 (자동 스트리밍)
+    with torch.no_grad():
+        model.generate(
+            inputs.input_ids,
+            streamer=streamer,
+            **generation_config
+        )
 
     print("\n")
     return
 
-# 8. RAG + 스트리밍 통합 함수
+# 9. RAG + 스트리밍 통합 함수
 def answer_with_rag_streaming(query, k=3, max_tokens=300, temperature=0.5):
     """RAG로 컨텍스트를 검색하고 스트리밍 방식으로 응답을 생성합니다."""
     print("관련 문서를 검색 중...")
@@ -150,10 +144,10 @@ def answer_with_rag_streaming(query, k=3, max_tokens=300, temperature=0.5):
 
 답변:"""
 
-    # "답변 생성 중..." 메시지 출력하지 않고 바로 스트리밍 시작
+    # 스트리밍 응답 생성
     generate_streaming_answer(prompt, max_new_tokens=max_tokens, temperature=temperature)
 
-# 9. 실행 함수
+# 10. 실행 함수
 def run_rag_streaming():
     print("PDF 문서 기반 EXAONE RAG 스트리밍 시스템이 준비되었습니다!")
     print("--------------------------------------------------------------")
@@ -166,6 +160,36 @@ def run_rag_streaming():
 
         answer_with_rag_streaming(query)
 
-# 10. 실행
+# 11. 성능 최적화 설정
+def optimize_performance():
+    """성능 최적화 설정을 적용합니다."""
+    # GPU 메모리 최적화
+    if torch.cuda.is_available():
+        # 사용 가능한 가장 빠른 CUDA 알고리즘 사용
+        torch.backends.cudnn.benchmark = True
+
+        # 메모리 캐싱 최적화
+        torch.cuda.empty_cache()
+
+        # 비동기 CUDA 연산 활성화
+        torch.cuda.set_device(torch.cuda.current_device())
+
+    # 모델 최적화
+    if hasattr(model, 'config'):
+        # 캐싱 최적화
+        if hasattr(model.config, 'use_cache'):
+            model.config.use_cache = True
+
+        # 병렬 처리 최적화
+        if hasattr(model.config, 'gradient_checkpointing'):
+            model.config.gradient_checkpointing = False
+
+    print("성능 최적화 설정이 적용되었습니다.")
+
+# 12. 실행
 if __name__ == "__main__":
+    # 성능 최적화 설정 적용
+    optimize_performance()
+
+    # RAG 스트리밍 시스템 실행
     run_rag_streaming()
