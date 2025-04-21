@@ -54,115 +54,39 @@ text_splitter = RecursiveCharacterTextSplitter(
 chunks = text_splitter.split_documents(documents)
 print(f"문서를 {len(chunks)}개의 청크로 분할했습니다.")
 
-# 3. 임베딩 모델 설정 (여러 옵션 시도)
-print("임베딩 모델 로드 중...")
-
-# 시도할 모델 목록 (성공할 때까지 순서대로 시도)
-embedding_models = [
-    "sentence-transformers/distiluse-base-multilingual-cased-v1",  # 다국어 지원 모델 (한국어 포함)
-    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",  # 다국어 지원 백업 모델
-    "sentence-transformers/all-MiniLM-L6-v2"  # 영어 모델 (최후의 대안)
-]
-
-embedding_model = None
-for model_name in embedding_models:
-    try:
-        print(f"{model_name} 모델 시도 중...")
-        embedding_model = HuggingFaceEmbeddings(
-            model_name=model_name,
-            model_kwargs={'device': 'cuda' if torch.cuda.is_available() else 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
-        )
-        print(f"{model_name} 모델 로드 성공!")
-        break
-    except Exception as e:
-        print(f"{model_name} 모델 로드 실패: {str(e)}")
-        continue
-
-if embedding_model is None:
-    # 모든 모델이 실패하면 fallback으로 단순 문자열 임베딩 사용
-    print("모든 임베딩 모델 로드 실패. 텍스트 분할만 진행합니다.")
-    from langchain_core.embeddings import FakeEmbeddings
-    
-    embedding_model = FakeEmbeddings(size=384)  # 임시 임베딩 사용
+# 3. 임베딩 모델 설정
+embedding_model = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/distiluse-base-multilingual-cased-v1",
+    model_kwargs={'device': 'cuda' if torch.cuda.is_available() else 'cpu'},
+    encode_kwargs={'normalize_embeddings': True}
+)
+print(f"{model_name} 모델 로드 성공!")
 
 # 4. 벡터 데이터베이스 생성
 vectorstore = FAISS.from_documents(chunks, embedding_model)
 print("벡터 데이터베이스 생성 완료")
 
-# 5. EXAONE 모델 로드 (재시도 로직 추가 및 네트워크 오류 처리)
+# 5. EXAONE 모델 로드
 model_name = "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
 print(f"{model_name} 모델 로드 중... (큰 모델이므로 시간이 소요될 수 있습니다)")
 
-max_retries = 3
-retry_delay = 10  # 초 단위
+# 토크나이저 로드
+tokenizer = AutoTokenizer.from_pretrained(
+    model_name,
+    trust_remote_code=True,
+    use_fast=False,  # 안정성을 위해 Fast Tokenizer 비활성화
+    local_files_only=False  # 처음에는 온라인 시도
+)
 
-for attempt in range(1, max_retries + 1):
-    try:
-        # 토크나이저 로드
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
-            trust_remote_code=True,
-            use_fast=False,  # 안정성을 위해 Fast Tokenizer 비활성화
-            local_files_only=False  # 처음에는 온라인 시도
-        )
-        
-        # 모델 로드
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name, 
-            torch_dtype=torch.float16,
-            device_map="auto",
-            trust_remote_code=True,
-            revision="main",  # 명시적으로 메인 브랜치 사용
-            low_cpu_mem_usage=True  # 메모리 사용량 최적화
-        )
-        print(f"모델 로드 성공!")
-        break
-    except Exception as e:
-        print(f"모델 로드 시도 {attempt}/{max_retries} 실패: {str(e)}")
-        
-        if "Connection error" in str(e) or "HTTPError" in str(e):
-            # 네트워크 오류인 경우 로컬 파일만 사용하도록 시도
-            print("네트워크 문제가 감지되었습니다. 로컬 캐시에서 모델을 찾아봅니다...")
-            try:
-                tokenizer = AutoTokenizer.from_pretrained(
-                    model_name,
-                    trust_remote_code=True,
-                    use_fast=False,
-                    local_files_only=True  # 로컬 파일만 사용
-                )
-                
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_name, 
-                    torch_dtype=torch.float16,
-                    device_map="auto",
-                    trust_remote_code=True,
-                    local_files_only=True,  # 로컬 파일만 사용
-                    low_cpu_mem_usage=True
-                )
-                print("로컬 캐시에서 모델 로드 성공!")
-                break
-            except Exception as local_error:
-                print(f"로컬 캐시에서 모델 로드 실패: {str(local_error)}")
-        
-        if attempt < max_retries:
-            print(f"{retry_delay}초 후 다시 시도합니다...")
-            time.sleep(retry_delay)
-        else:
-            print("모델 로드에 실패했습니다. 네트워크 연결을 확인하거나 다른 모델을 시도해보세요.")
-            print("대체 모델을 사용하여 계속하시겠습니까? (y/n)")
-            use_alternative = input().strip().lower()
-            if use_alternative == 'y':
-                print("더 작은 대체 모델을 사용합니다...")
-                # 여기서 더 작은 대체 모델을 사용할 수 있습니다 (EXAONE 모델 로드 실패 시)
-                # 예: GPT-2 같은 작은 모델
-                model_name = "gpt2"
-                tokenizer = AutoTokenizer.from_pretrained(model_name)
-                model = AutoModelForCausalLM.from_pretrained(model_name)
-                print(f"{model_name} 모델 로드 성공!")
-                break
-            else:
-                raise
+# 모델 로드
+model = AutoModelForCausalLM.from_pretrained(
+    model_name, 
+    torch_dtype=torch.float16,
+    device_map="auto",
+    trust_remote_code=True,
+    revision="main",  # 명시적으로 메인 브랜치 사용
+    low_cpu_mem_usage=True  # 메모리 사용량 최적화
+)
 
 # 6. LLM 파이프라인 설정
 llm = pipeline(
