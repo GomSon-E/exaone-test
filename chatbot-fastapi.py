@@ -3,7 +3,7 @@ import torch
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -74,13 +74,18 @@ def init_rag_system():
         trust_remote_code=True
     )
 
+    # 양자화 설정을 BitsAndBytesConfig로 구성
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True
+    )
+
     # 모델 로드 - 성능 최적화 설정
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        load_in_4bit=True,  # 4비트 양자화 적용
-        bnb_4bit_compute_dtype=torch.float16,  # 계산 시 사용할 데이터 타입
-        bnb_4bit_quant_type="nf4",  # 양자화 타입 (nf4 또는 fp4)
-        bnb_4bit_use_double_quant=True,  # 이중 양자화로 추가 메모리 절약
+        quantization_config=quantization_config,
         device_map="auto",
         trust_remote_code=True,
         low_cpu_mem_usage=True
@@ -111,11 +116,12 @@ def optimize_performance():
 
     print("성능 최적화 설정이 적용되었습니다.")
 
-def retrieve_context(query, k=3):
+def retrieve_context(query, k=1):
     """쿼리와 관련된 문서를 검색하여 컨텍스트를 생성합니다."""
     global vectorstore
     relevant_docs = vectorstore.similarity_search(query, k=k)
-    context = "\n\n".join([doc.page_content for doc in relevant_docs])
+    # 각 문서를 200자로 제한
+    context = "\n\n".join([doc.page_content[:200] for doc in relevant_docs])
     return context
 
 def generate_answer(prompt, max_new_tokens=200, temperature=0.3):
@@ -146,29 +152,15 @@ def generate_answer(prompt, max_new_tokens=200, temperature=0.3):
     response = tokenizer.decode(output[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
     return response.strip()
 
-def answer_with_rag(query, k=3, max_tokens=300, temperature=0.5):
+def answer_with_rag(query, k=1, max_tokens=100, temperature=0):
     """RAG로 컨텍스트를 검색하고 응답을 생성합니다."""
     context = retrieve_context(query, k=k)
-
-    # 프롬프트 구성
-    system_prompt = "다음 질문에 대해 제공된 문서 정보를 바탕으로 간단하게 답변해주세요."
-    prompt = f"""{system_prompt}
-
-문맥:
-{context}
-
-질문: {query}
-
-답변:"""
-
-    # 응답 생성 - 메시지 길이 제한 고려 (카카오톡은 일반적으로 1000자 제한)
+    
+    # 간결한 프롬프트 구성
+    prompt = f"제공된 정보로 짧게 답변: 문맥: {context} 질문: {query} 답변:"
+    
+    # 응답 생성 - 토큰 수와 temperature 최적화
     answer = generate_answer(prompt, max_new_tokens=max_tokens, temperature=temperature)
-
-    # 응답이 너무 길 경우 요약
-    # if len(answer) > 900:
-    #    summarize_prompt = f"다음 내용을 800자 이내로 요약해주세요: {answer}"
-    #    answer = generate_answer(summarize_prompt, max_new_tokens=150, temperature=0.3)
-
     return answer
 
 # 기본 경로 테스트용
