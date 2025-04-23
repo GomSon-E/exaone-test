@@ -43,7 +43,7 @@ def init_rag_system():
 
     # 2. 텍스트 분할
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
+        chunk_size=800,
         chunk_overlap=200,
         length_function=len
     )
@@ -139,7 +139,7 @@ def generate_answer(prompt, max_new_tokens=200, temperature=0.3):
     # 효율적인 생성 설정 - 수정된 부분
     generation_config = {
         "max_new_tokens": max_new_tokens,
-        "do_sample": True if temperature > 0 else False,  # temperature에 따라 do_sample 설정
+        "do_sample": True,
         "temperature": temperature,
         "num_beams": 1,
         "pad_token_id": tokenizer.eos_token_id,
@@ -157,13 +157,19 @@ def generate_answer(prompt, max_new_tokens=200, temperature=0.3):
     response = tokenizer.decode(output[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
     return response.strip()
 
-def answer_with_rag(query, k=1, max_tokens=100, temperature=0):
+def answer_with_rag(query, k=3, max_tokens=100, temperature=0.4):
     """RAG로 컨텍스트를 검색하고 응답을 생성합니다."""
     context = retrieve_context(query, k=k)
     
+    if not context.strip():
+        return "죄송합니다. 질문에 관한 정보를 찾지 못했습니다. 다른 방식으로 질문해 주시겠어요?"
+
     # 간결한 프롬프트 구성
-    prompt = f"제공된 정보로 짧게 답변: 문맥: {context} 질문: {query} 답변:"
-    
+    prompt = f"""다음 정보를 바탕으로 사용자의 질문에 답변해주세요. 
+                문서 내용에 없는 정보는 추측하지 말고, 정보가 부족하면 솔직히 모른다고 말해주세요.
+                정보가 충분하다면 간단하고 정확하게 요약된 답변을 해주세요.
+                ### 참고 정보:{context} ### 사용자 질문:{query} ### 답변:"""
+
     # 응답 생성 - 토큰 수와 temperature 최적화
     answer = generate_answer(prompt, max_new_tokens=max_tokens, temperature=temperature)
     return answer
