@@ -13,8 +13,8 @@ app = FastAPI()
 
 # PDF 파일 경로 설정 (기존 코드와 동일)
 pdf_paths = [
-    "doc1.pdf",
-    "doc2.pdf"
+    "정책공약집.pdf",
+    "지역공약.pdf"
 ]
 
 # 전역 변수로 모델과 벡터 스토어 선언
@@ -63,6 +63,11 @@ def init_rag_system():
     print("벡터 데이터베이스 생성 중...")
     vectorstore = FAISS.from_documents(chunks, embedding_model)
     print("벡터 데이터베이스 생성 완료")
+
+    for doc_id in list(vectorstore.docstore._dict.keys()):
+        print(f"문서 ID {doc_id}의 내용:")
+        print(vectorstore.docstore._dict[doc_id])
+        print("-" * 50)
 
     # 5. EXAONE 모델 로드
     model_name = "LGAI-EXAONE/EXAONE-3.5-2.4B-Instruct"
