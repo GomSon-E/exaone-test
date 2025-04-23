@@ -171,7 +171,7 @@ def answer_with_rag(query, k=5, max_tokens=100, temperature=0.5):
     # 응답 생성 - 토큰 수와 temperature 최적화
     answer = generate_answer(prompt, max_new_tokens=max_tokens, temperature=temperature)
     answer = re.sub(r'\*\*(.*?)\*\*', r'\1', answer)
-    return f'🤖 {query} 관련 내용 답변드립니다.\n\n {answer}'
+    return answer
 
 # 기본 경로 테스트용
 @app.get('/')
@@ -196,8 +196,21 @@ async def kakao_skill(request: Request):
         "template": {
             "outputs": [
                 {
-                    "simpleText": {
-                        "text": answer
+                    "textCard": {
+                        "title": f'🤖 {user_query} 관련 답변드립니다.',
+                        "description": answer,
+                        "buttons": [
+                            {
+                                "action": "webLink",
+                                "label": "🌍 지역공약 살펴보기",
+                                "webLinkUrl": "https://www.naver.com/"
+                            },
+                            {
+                                "action": "webLink",
+                                "label": "📚 정책공약집 살펴보기",
+                                "webLinkUrl": "https://www.naver.com/"
+                            }
+                        ]
                     }
                 }
             ]
