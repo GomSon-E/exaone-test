@@ -1,4 +1,5 @@
 import os
+import re
 import torch
 import uvicorn
 from fastapi import FastAPI, Request
@@ -121,15 +122,15 @@ def optimize_performance():
 
     print("성능 최적화 설정이 적용되었습니다.")
 
-def retrieve_context(query, k=1):
+def retrieve_context(query, k):
     """쿼리와 관련된 문서를 검색하여 컨텍스트를 생성합니다."""
     global vectorstore
     relevant_docs = vectorstore.similarity_search(query, k=k)
-    # 각 문서를 200자로 제한
-    context = "\n\n".join([doc.page_content[:200] for doc in relevant_docs])
+
+    context = "\n\n".join([doc.page_content for doc in relevant_docs])
     return context
 
-def generate_answer(prompt, max_new_tokens=200, temperature=0.3):
+def generate_answer(prompt, max_new_tokens, temperature):
     """프롬프트에 대한 응답을 생성합니다."""
     global model, tokenizer
 
@@ -157,22 +158,20 @@ def generate_answer(prompt, max_new_tokens=200, temperature=0.3):
     response = tokenizer.decode(output[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
     return response.strip()
 
-def answer_with_rag(query, k=3, max_tokens=100, temperature=0.4):
+def answer_with_rag(query, k=5, max_tokens=100, temperature=0.5):
     """RAG로 컨텍스트를 검색하고 응답을 생성합니다."""
     context = retrieve_context(query, k=k)
-    
-    if not context.strip():
-        return "죄송합니다. 질문에 관한 정보를 찾지 못했습니다. 다른 방식으로 질문해 주시겠어요?"
 
     # 간결한 프롬프트 구성
-    prompt = f"""다음 정보를 바탕으로 사용자의 질문에 답변해주세요. 
-                문서 내용에 없는 정보는 추측하지 말고, 정보가 부족하면 솔직히 모른다고 말해주세요.
-                정보가 충분하다면 간단하고 정확하게 요약된 답변을 해주세요.
-                ### 참고 정보:{context} ### 사용자 질문:{query} ### 답변:"""
+    prompt = f""" 제공한 정보를 바탕으로 사용자 질문에 답하세요.
+                문서 내용에 없는 정보는 추측하지 말고, 정보가 부족하면 솔직히 모른다고 말하세요.
+                사용자 요청 키워드를 답변에 되풀이 하지 마시오.
+                ### 참고 정보:{context} ### 사용자 질문 : {query}와 관련된 2~3가지 공약만 100자 이하로 답변해줘.  ###답변:"""
 
     # 응답 생성 - 토큰 수와 temperature 최적화
     answer = generate_answer(prompt, max_new_tokens=max_tokens, temperature=temperature)
-    return answer
+    answer = re.sub(r'\*\*(.*?)\*\*', r'\1', answer)
+    return f'🤖 {query} 관련 내용 답변드립니다.\n\n {answer}'
 
 # 기본 경로 테스트용
 @app.get('/')
