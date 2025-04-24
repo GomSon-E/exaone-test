@@ -32,51 +32,44 @@ rag_chain = None
 
 # 1. 검색 최적화를 위한 쿼리 재구성 프롬프트
 query_transformation_prompt = PromptTemplate.from_template(
-    """당신은 문서 검색 전문가입니다. 주어진 질문을 분석하고, 관련 문서를 효과적으로 검색하기 위한 
-    최적의 검색어를 생성해주세요.
+    """주어진 질문을 분석하고, 관련 문서를 효과적으로 검색하기 위한 최적의 검색어만 출력. 설명은 불필요.
     
     원래 질문: {question}
-    
-    검색에 사용할 키워드나 문구만 출력하세요. 설명은 불필요합니다.
 
-    검색 키워드 :
+    검색어 : 
     """
 )
 
 # 2. 문서 분석 프롬프트
 document_analysis_prompt = PromptTemplate.from_template(
-    """당신은 정책 문서 분석 전문가입니다. 다음 문서들을 분석하고, 주어진 질문과 관련된 정책들을 찾아 정리해주세요.
+    """다음 문서에서 질문과 관련된 정책/공약 제목만 추출.
     
     질문: {question}
     
     문서 내용:
     {context}
     
-    위 문서에서 질문과 관련된 정책/공약 제목만 추출하세요.
-    관련 정책이 없다면 "관련 정책 정보 없음"이라고 답하세요.
-    
-    추출 정책/공약 제목 :
+    관련 정책이 없다면 "관련 정책 정보 없음"이라고 답.
+
+    추출된 정책/공약 : 
     """
 )
 
 # 3. 최종 응답 생성 프롬프트 - JSON 형식으로 출력
 final_answer_prompt = PromptTemplate.from_template(
-    """당신은 정책 전문가입니다. 분석된 정책 정보를 바탕으로 사용자 질문에 JSON 형식으로 답변해주세요.
+    """분석된 정책 정보를 바탕으로 사용자 질문에 관련된 2~3가지 공약을 JSON 형식으로 답변.
     
     질문: {question}
     
     분석된 정책 정보:
     {analyzed_info}
     
-    위 정보를 바탕으로 질문과 관련된 2~3가지 공약을 JSON 형식으로 제공하세요.
-    JSON 형식은 다음과 같아야 합니다:
+    JSON 형식은 다음과 같아야 함.
     ```json
     {{
         "공약": [ "첫번째 공약 제목 또는 핵심 키워드", 두번째 공약 제목", ... ],
     }}
     ```
-      
-    JSON 형식만 출력하고 다른 설명은 포함하지 마세요.
 
     JSON 답변 : 
     """
@@ -122,14 +115,9 @@ def create_multimodal_rag_chain(retriever, llm):
     
     # 후처리 함수 정의 - JSON 응답 처리
     def format_answer(answer):
-        print("#######################")
         print(answer)
-
         json_pattern = r'JSON 답변 :\s*```(?:json)?\s*([\s\S]*?)```'
         json_match = re.search(json_pattern, answer)
-
-        print("##########json_match#############")
-        print(json_match.group(1).strip())
         
         if json_match:
             # JSON 코드 블록 내용 추출
@@ -182,7 +170,7 @@ def init_rag_system():
     # 2. 텍스트 분할
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
-        chunk_overlap=200,
+        chunk_overlap=100,
         length_function=len
     )
     chunks = text_splitter.split_documents(documents)
@@ -213,7 +201,7 @@ def init_rag_system():
     # 5. 검색기(Retriever) 설정 - 벡터스토어에서 직접 생성
     retriever = vectorstore.as_retriever(
         search_type="similarity",
-        search_kwargs={"k": 5}
+        search_kwargs={"k": 2}
     )
 
     # 6. EXAONE 모델 로드 및 LangChain LLM 래퍼 설정
@@ -319,19 +307,12 @@ async def kakao_skill(request: Request):
         # 공약이 있는 경우
         description = ""
         for idx, policy in enumerate(policies, 1):
-            # 두 가지 가능한 형식 처리
-            if isinstance(policy, str):
                 # 공약이 문자열 형태인 경우
                 description += f"{idx}. {policy}\n"
-            elif isinstance(policy, dict) and "제목" in policy:
-                # 공약이 객체 형태인 경우
-                description += f"{idx}. {policy['제목']}\n"
-            else:
-                description += f"{idx}. {str(policy)}\n"
     else:
         # 공약이 없는 경우
         description = parsed_json.get("메시지", "요청하신 내용에 대한 정보를 찾을 수 없습니다")
-    
+
     res = {
         "version": "2.0",
         "template": {
@@ -358,7 +339,6 @@ async def kakao_skill(request: Request):
         }
     }
 
-    print('################res####################')
     print(res)
 
     return res
