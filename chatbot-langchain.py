@@ -175,8 +175,11 @@ def init_rag_system():
 
     # 5. 검색기(Retriever) 설정 - 벡터스토어에서 직접 생성
     retriever = vectorstore.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": 2}
+        search_type="similarity_score_threshold",
+        search_kwargs={
+            "k": 5,                 # 최대 5개 문서
+            "score_threshold": 0.8  # 유사도 점수가 0.8 이상인 문서만 반환
+        }
     )
 
     # 6. EXAONE 모델 로드 및 LangChain LLM 래퍼 설정
