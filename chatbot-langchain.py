@@ -40,34 +40,21 @@ query_transformation_prompt = PromptTemplate.from_template(
     """
 )
 
-# 2. 문서 분석 프롬프트
-document_analysis_prompt = PromptTemplate.from_template(
-    """다음 문서에서 질문과 관련된 정책/공약 제목만 추출.
+# 2. 응답 생성 프롬프트
+answer_generation_prompt = PromptTemplate.from_template(
+    """1. 문서에서 질문과 관련된 정책/공약 제목 추출
+    2. 관련 정책이 없다면 "관련 정책 정보 없음"이라고 답
+    3. 추출된 정보를 바탕 2~3가지 공약을 JSON 형식으로 출력
     
     질문: {question}
     
     문서 내용:
     {context}
     
-    관련 정책이 없다면 "관련 정책 정보 없음"이라고 답.
-
-    추출된 정책/공약 : 
-    """
-)
-
-# 3. 최종 응답 생성 프롬프트 - JSON 형식으로 출력
-final_answer_prompt = PromptTemplate.from_template(
-    """분석된 정책 정보를 바탕으로 사용자 질문에 관련된 2~3가지 공약을 JSON 형식으로 답변.
-    
-    질문: {question}
-    
-    분석된 정책 정보:
-    {analyzed_info}
-    
-    JSON 형식은 다음과 같아야 함.
+    JSON 형식은 다음과 같아야 함 : 
     ```json
     {{
-        "공약": [ "첫번째 공약 제목 또는 핵심 키워드", 두번째 공약 제목", ... ],
+        "공약": [ "첫번째 공약 제목 또는 핵심 키워드", "두번째 공약 제목", ... ],
     }}
     ```
 
@@ -85,8 +72,7 @@ def create_multimodal_rag_chain(retriever, llm):
         | StrOutputParser()
     )
     
-    # 2. 검색 체인 (변환된 쿼리 사용)
-    # retrieve_documents 함수에서 메서드 호출 부분 수정
+    # 검색 체인
     def retrieve_documents(input_dict):
         original_question = input_dict["original_question"]
         optimized_query = input_dict["optimized_query"]
@@ -99,16 +85,9 @@ def create_multimodal_rag_chain(retriever, llm):
             "context": "\n\n".join([doc.page_content for doc in retrieved_docs])
         }
     
-    # 3. 문서 분석 체인
-    document_analysis_chain = (
-        document_analysis_prompt
-        | llm
-        | StrOutputParser()
-    )
-    
-    # 4. 최종 응답 생성 체인
-    final_answer_chain = (
-        final_answer_prompt
+    # 응답 생성 체인
+    answer_chain = (
+        answer_generation_prompt
         | llm
         | StrOutputParser()
     )
@@ -135,14 +114,10 @@ def create_multimodal_rag_chain(retriever, llm):
         # 2단계: 최적화된 쿼리로 문서 검색
         | RunnableLambda(retrieve_documents).with_config(run_name="Document Retrieval")
         
-        # 3단계: 검색된 문서 분석
-        | {"question": lambda x: x["question"], 
-           "analyzed_info": document_analysis_chain}
+        # 3단계: 통합된 문서 분석 및 최종 응답 생성 (2번과 3번 단계 통합)
+        | answer_chain
         
-        # 4단계: 최종 응답 생성
-        | final_answer_chain
-        
-        # 5단계: 응답 후처리
+        # 4단계: 응답 후처리
         | RunnableLambda(format_answer)
     )
     
@@ -170,7 +145,7 @@ def init_rag_system():
     # 2. 텍스트 분할
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
-        chunk_overlap=100,
+        chunk_overlap=200,
         length_function=len
     )
     chunks = text_splitter.split_documents(documents)
@@ -243,8 +218,8 @@ def init_rag_system():
         model=model,
         tokenizer=tokenizer,
         max_new_tokens=100,
-        do_sample=True,
-        temperature=0.3,
+        # do_sample=True,
+        # temperature=0.3,
         device_map="auto",
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.eos_token_id
@@ -307,8 +282,7 @@ async def kakao_skill(request: Request):
         # 공약이 있는 경우
         description = ""
         for idx, policy in enumerate(policies, 1):
-                # 공약이 문자열 형태인 경우
-                description += f"{idx}. {policy}\n"
+            description += f"{idx}. {policy}\n"
     else:
         # 공약이 없는 경우
         description = parsed_json.get("메시지", "요청하신 내용에 대한 정보를 찾을 수 없습니다")
