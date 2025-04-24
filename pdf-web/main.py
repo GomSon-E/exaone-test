@@ -81,6 +81,44 @@ async def get_thumbnail(filename: str):
         media_type="image/jpeg"  # 썸네일 형식에 맞게 조정
     )
 
+@app.get("/serve-pdf/{filename}")
+async def serve_pdf(filename: str):
+    """
+    PDF 파일을 브라우저에서 직접 볼 수 있게 제공합니다.
+    브라우저의 기본 PDF 뷰어에서 전체 화면으로 표시됩니다.
+    """
+    file_path = FILES_DIR / filename
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail=f"PDF 파일 '{filename}'을 찾을 수 없습니다.")
+    
+    # PDF 파일을 inline으로 제공 (브라우저에서 바로 열림)
+    return FileResponse(
+        path=file_path,
+        media_type="application/pdf",
+        filename=filename,
+        content_disposition_type="inline"  # 브라우저에서 바로 보기
+    )
+
+# 특정 PDF 파일만 제공하는 경로 (예: full_document.pdf)
+@app.get("/view-document")
+async def view_document():
+    """
+    전체 문서 PDF를 브라우저에서 바로 볼 수 있게 제공합니다.
+    URL에 접속하면 PDF가 브라우저에서 바로 열립니다.
+    """
+    filename = "region_document.pdf"
+    file_path = FILES_DIR / filename
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
+    
+    return FileResponse(
+        path=file_path,
+        media_type="application/pdf",
+        content_disposition_type="inline"  # 브라우저에서 바로 보기
+    )
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=5001, reload=True)
