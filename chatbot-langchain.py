@@ -38,6 +38,8 @@ query_transformation_prompt = PromptTemplate.from_template(
     원래 질문: {question}
     
     검색에 사용할 키워드나 문구만 출력하세요. 설명은 불필요합니다.
+
+    검색 키워드 :
     """
 )
 
@@ -50,9 +52,10 @@ document_analysis_prompt = PromptTemplate.from_template(
     문서 내용:
     {context}
     
-    위 문서에서 질문과 관련된 정책/공약만 추출하세요. 
-    각 정책/공약의 핵심 내용과 위치한 문서 부분을 명시하세요.
+    위 문서에서 질문과 관련된 정책/공약 제목만 추출하세요.
     관련 정책이 없다면 "관련 정책 정보 없음"이라고 답하세요.
+    
+    추출 정책/공약 제목 :
     """
 )
 
@@ -77,23 +80,13 @@ final_answer_prompt = PromptTemplate.from_template(
                 "제목": "두번째 공약 제목",
             }},
             ...
-        ],
-        "총_개수": 공약 수,
-        "신뢰도": "높음|중간|낮음" (문서 내 관련 정보의 양과 질에 따라 결정)
+        ]
     }}
     ```
-    
-    문서에 관련 정보가 없다면, 다음과 같이 응답하세요:
-    ```json
-    {{
-        "공약": [],
-        "총_개수": 0,
-        "신뢰도": "낮음",
-        "메시지": "요청하신 내용에 대한 정보를 찾을 수 없습니다"
-    }}
-    ```
-    
+      
     JSON 형식만 출력하고 다른 설명은 포함하지 마세요.
+
+    JSON 답변 : 
     """
 )
 
@@ -137,6 +130,9 @@ def create_multimodal_rag_chain(retriever, llm):
     
     # 후처리 함수 정의 - JSON 응답 처리
     def format_answer(answer):
+        print("#######################")
+        print(answer)
+
         # JSON 형식 추출 (```json과 같은 마크다운 코드 블록 제거)
         json_pattern = r'```(?:json)?\s*([\s\S]*?)```'
         json_match = re.search(json_pattern, answer)
