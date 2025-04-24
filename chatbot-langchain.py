@@ -72,15 +72,7 @@ final_answer_prompt = PromptTemplate.from_template(
     JSON 형식은 다음과 같아야 합니다:
     ```json
     {{
-        "공약": [
-            {{
-                "제목": "공약 제목 또는 핵심 키워드",
-            }},
-            {{
-                "제목": "두번째 공약 제목",
-            }},
-            ...
-        ]
+        "공약": [ "첫번째 공약 제목 또는 핵심 키워드", 두번째 공약 제목", ... ],
     }}
     ```
       
@@ -133,17 +125,18 @@ def create_multimodal_rag_chain(retriever, llm):
         print("#######################")
         print(answer)
 
-        # JSON 형식 추출 (```json과 같은 마크다운 코드 블록 제거)
-        json_pattern = r'```(?:json)?\s*([\s\S]*?)```'
+        json_pattern = r'JSON 답변 :\s*```(?:json)?\s*([\s\S]*?)```'
         json_match = re.search(json_pattern, answer)
+
+        print("##########json_match#############")
+        print(json_match.group(1).strip())
         
         if json_match:
             # JSON 코드 블록 내용 추출
             json_str = json_match.group(1).strip()
             return json_str
-        else:
-            # JSON 형식이 아닌 경우 그대로 반환 (볼드 처리만 제거)
-            return re.sub(r'\*\*(.*?)\*\*', r'\1', answer).strip()
+        
+        return None
     
     # 전체 멀티모달 체인 구성
     multimodal_chain = (
@@ -317,19 +310,24 @@ async def kakao_skill(request: Request):
 
     # JSON 문자열 파싱
     parsed_json = json.loads(answer)
-    
-    # 공약 목록 및 신뢰도 추출
+
+    # 공약 목록 추출
     policies = parsed_json.get("공약", [])
-    reliability = parsed_json.get("신뢰도", "")
-    
+
     # 카카오톡 스킬 응답 형식으로 변환
     if policies:
         # 공약이 있는 경우
         description = ""
         for idx, policy in enumerate(policies, 1):
-            description += f"{idx}. {policy['제목']}\n"
-        
-        description += f"\n신뢰도: {reliability}"
+            # 두 가지 가능한 형식 처리
+            if isinstance(policy, str):
+                # 공약이 문자열 형태인 경우
+                description += f"{idx}. {policy}\n"
+            elif isinstance(policy, dict) and "제목" in policy:
+                # 공약이 객체 형태인 경우
+                description += f"{idx}. {policy['제목']}\n"
+            else:
+                description += f"{idx}. {str(policy)}\n"
     else:
         # 공약이 없는 경우
         description = parsed_json.get("메시지", "요청하신 내용에 대한 정보를 찾을 수 없습니다")
@@ -359,6 +357,9 @@ async def kakao_skill(request: Request):
             ]
         }
     }
+
+    print('################res####################')
+    print(res)
 
     return res
 
