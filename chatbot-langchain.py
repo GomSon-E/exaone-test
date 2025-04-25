@@ -42,7 +42,7 @@ query_transformation_prompt = PromptTemplate.from_template(
 
 # 2. 응답 생성 프롬프트
 answer_generation_prompt = PromptTemplate.from_template(
-    """1. 문서에서 질문과 관련된 정책/공약 제목 추출
+    """1. 문서에서 질문과 밀접하게 관련된 자세한 정책/공약 추출
     2. 관련 정책이 없다면 "관련 정책 정보 없음"이라고 답
     3. 추출된 정보를 바탕 2~3가지 공약을 JSON 형식으로 출력
     
@@ -94,7 +94,6 @@ def create_multimodal_rag_chain(retriever, llm):
     
     # 후처리 함수 정의 - JSON 응답 처리
     def format_answer(answer):
-        print(answer)
         json_pattern = r'JSON 답변 :\s*```(?:json)?\s*([\s\S]*?)```'
         json_match = re.search(json_pattern, answer)
         
@@ -177,7 +176,7 @@ def init_rag_system():
     retriever = vectorstore.as_retriever(
         search_type="similarity_score_threshold",
         search_kwargs={
-            "k": 5,                 # 최대 5개 문서
+            "k": 3,                 # 최대 3개 문서
             "score_threshold": 0.8  # 유사도 점수가 0.8 이상인 문서만 반환
         }
     )
@@ -296,18 +295,13 @@ async def kakao_skill(request: Request):
             "outputs": [
                 {
                     "textCard": {
-                        "title": f'🤖 {user_query} 관련 답변드립니다.',
+                        "title": f'🌳 {user_query} 관련 답변드립니다.',
                         "description": description,
                         "buttons": [
                             {
                                 "action": "webLink",
-                                "label": "🌍 지역공약 살펴보기",
-                                "webLinkUrl": "https://www.naver.com/"
-                            },
-                            {
-                                "action": "webLink",
-                                "label": "📚 정책공약집 살펴보기",
-                                "webLinkUrl": "https://www.naver.com/"
+                                "label": "📑 자세히 알아보기",
+                                "webLinkUrl": "http://www.dmillions.com/"
                             }
                         ]
                     }
