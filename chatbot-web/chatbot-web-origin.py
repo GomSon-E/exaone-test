@@ -34,11 +34,10 @@ templates_dir = os.path.join(os.path.dirname(__file__), "templates")
 model = None
 tokenizer = None
 vectorstore = None
-rag_chain = None
 
 def init_rag_system():
     """RAG 시스템 초기화"""
-    global model, tokenizer, vectorstore, rag_chain
+    global model, tokenizer, vectorstore
 
     print("RAG 시스템 초기화 중...")
 
@@ -177,19 +176,22 @@ def post_process_answer(answer):
     answer = re.sub(r'\*\*(.*?)\*\*', r'\1', answer)
     
     # "다음과 같습니다" 패턴 제거
-    answer = re.sub(r'^(다음과 같습니다|관련 공약은 다음과 같습니다|다음과 같은 내용이 있습니다)[\.:]?\s*', '', answer)
+    answer = re.sub(r'^(다음과 같습니다|관련 공약은 다음과 같습니다|다음과 같은 내용이 있습니다|다음과 같은 공약이 있습니다|다음을 참고하세요)[\.:]?\s*', '', answer)
     
     # "~입니다"로 시작하는 패턴 제거
     answer = re.sub(r'^[^\.]*입니다[\.:]?\s*', '', answer)
     
+    # 모든 콜론 뒤에 줄바꿈 추가
+    answer = re.sub(r':\s*', ':\n', answer)
+    
     # 번호 리스트 형식 정리
     answer = re.sub(r'(\d+)\.\s+', r'\n\1. ', answer)
     
-    # 빈 줄 정리
-    answer = re.sub(r'\n{3,}', '\n\n', answer)
+    # 불필요한 연속된 줄바꿈 정리
+    answer = re.sub(r'(<br>){3,}', '<br><br>', answer)
     
     # 첫 번째 줄이 비어 있으면 제거
-    answer = re.sub(r'^\s*\n', '', answer)
+    answer = re.sub(r'^(<br>)', '', answer)
     
     # 응답이 비어 있는 경우 처리
     if not answer.strip():
@@ -207,11 +209,11 @@ def answer_with_rag(query):
               
               ### 응답 형식 ###
               답변은 다음과 같은 일관된 형식으로 작성하세요:
-              1. 질문 주제와 관련된 공약 또는 정책을 명확히 설명합니다.
-              2. 필요한 경우 항목별로 구분하여 작성합니다.
-              3. 근거가 되는 내용만 포함하고 불필요한 반복은 피합니다.
-              4. 모든 답변은 완전한 문장으로 작성합니다.
-              5. "다음과 같습니다" 또는 "~ 입니다"와 같은 표현으로 시작하지 마세요.
+              1. 질문 주제와 관련된 공약 또는 정책을 항목별로 나눠 작성합니다.
+              2. 모든 요점 앞에는 번호나 기호(예: 1. 2. 3. 또는 - - -)를 붙여 항목별로 구분합니다.
+              3. 각 항목은 다음 줄에 작성하여 가독성을 높입니다.
+              4. "다음과 같습니다", "~ 입니다", "다음을 참고하세요" 등의 표현으로 시작하지 마세요.
+              5. 각 항목은 짧고 명확한 문장으로 작성합니다.
               
               ### 참고 정보: ### 
               {context}
@@ -271,10 +273,10 @@ async def web_chat(request: Request):
         print(f"질문: {user_query}")
         print(f"응답: {answer}")
 
-        # 웹 클라이언트 응답 형식
+        # 웹 클라이언트 응답 형식 (HTML 태그가 해석되도록 safe=False 설정)
         return JSONResponse({
             "response": answer
-        })
+        }, headers={"Content-Type": "application/json; charset=utf-8"})
         
     except Exception as e:
         print(f"오류 발생: {str(e)}")
