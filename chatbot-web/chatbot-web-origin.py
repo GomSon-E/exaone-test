@@ -6,7 +6,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, pipeline
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -34,10 +34,11 @@ templates_dir = os.path.join(os.path.dirname(__file__), "templates")
 model = None
 tokenizer = None
 vectorstore = None
+rag_chain = None
 
 def init_rag_system():
     """RAG 시스템 초기화"""
-    global model, tokenizer, vectorstore
+    global model, tokenizer, vectorstore, rag_chain
 
     print("RAG 시스템 초기화 중...")
 
@@ -77,8 +78,8 @@ def init_rag_system():
     vectorstore = FAISS.from_documents(chunks, embedding_model)
     print("벡터 데이터베이스 생성 완료")
 
-    for doc_id in list(vectorstore.docstore._dict.keys()):
-        print(f"문서 ID {doc_id}의 내용:")
+    for doc_id in list(vectorstore.docstore._dict.keys())[:3]:  # 처음 3개만 출력해 로그 크기 제한
+        print(f"문서 ID {doc_id}의 내용 (샘플):")
         print(vectorstore.docstore._dict[doc_id])
         print("-" * 50)
 
@@ -149,7 +150,7 @@ def generate_answer(prompt):
     # 입력 인코딩 - attention_mask 명시적 설정
     inputs = tokenizer(prompt, return_tensors="pt", padding=True).to(model.device)
 
-    # 효율적인 생성 설정 - 수정된 부분
+    # 효율적인 생성 설정
     generation_config = {
         "max_new_tokens": 500,
         # "do_sample": True,
@@ -170,21 +171,74 @@ def generate_answer(prompt):
     response = tokenizer.decode(output[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
     return response.strip()
 
+def post_process_answer(answer):
+    """응답을 후처리하여 일관된 형식으로 정제합니다."""
+    # 불필요한 마크다운 제거
+    answer = re.sub(r'\*\*(.*?)\*\*', r'\1', answer)
+    
+    # "다음과 같습니다" 패턴 제거
+    answer = re.sub(r'^(다음과 같습니다|관련 공약은 다음과 같습니다|다음과 같은 내용이 있습니다)[\.:]?\s*', '', answer)
+    
+    # "~입니다"로 시작하는 패턴 제거
+    answer = re.sub(r'^[^\.]*입니다[\.:]?\s*', '', answer)
+    
+    # 번호 리스트 형식 정리
+    answer = re.sub(r'(\d+)\.\s+', r'\n\1. ', answer)
+    
+    # 빈 줄 정리
+    answer = re.sub(r'\n{3,}', '\n\n', answer)
+    
+    # 첫 번째 줄이 비어 있으면 제거
+    answer = re.sub(r'^\s*\n', '', answer)
+    
+    # 응답이 비어 있는 경우 처리
+    if not answer.strip():
+        answer = "관련 정보를 찾을 수 없습니다."
+        
+    return answer.strip()
+
 def answer_with_rag(query):
-    """RAG로 컨텍스트를 검색하고 응답을 생성합니다."""
+    """RAG로 컨텍스트를 검색하고 일관된 형식으로 응답을 생성합니다."""
     context = retrieve_context(query, k=5)
 
-    # 간결한 프롬프트 구성
-    prompt = f""" 제공한 정보를 바탕으로 사용자 질문에 답하세요.
-                문서 내용에 없는 정보는 추측하지 말고, 정보가 부족하면 솔직히 모른다고 말하세요.
-                사용자 요청 키워드를 답변에 되풀이 하지 마시오.
-                답변은 완전한 문장으로 작성하세요.
-                ### 참고 정보:{context} ### 사용자 질문 : {query}와 관련된 공약만 문서에 있는 그대로 답변해줘.  ###답변:"""
+    # 개선된 프롬프트 구성 - 명확한 응답 형식 지정
+    prompt = f"""제공한 정보를 바탕으로 사용자 질문에 답하세요.
+              문서 내용에 없는 정보는 추측하지 말고, 정보가 부족하면 솔직히 모른다고 말하세요.
+              
+              ### 응답 형식 ###
+              답변은 다음과 같은 일관된 형식으로 작성하세요:
+              1. 질문 주제와 관련된 공약 또는 정책을 명확히 설명합니다.
+              2. 필요한 경우 항목별로 구분하여 작성합니다.
+              3. 근거가 되는 내용만 포함하고 불필요한 반복은 피합니다.
+              4. 모든 답변은 완전한 문장으로 작성합니다.
+              5. "다음과 같습니다" 또는 "~ 입니다"와 같은 표현으로 시작하지 마세요.
+              
+              ### 참고 정보: ### 
+              {context}
+              
+              ### 사용자 질문 ###
+              {query}와 관련된 공약만 문서에 있는 그대로 답변해주세요.
+              
+              ### 답변 ###"""
 
-    # 응답 생성 - 토큰 수와 temperature 최적화
-    answer = generate_answer(prompt)
-    # answer = re.sub(r'\*\*(.*?)\*\*', r'\1', answer)
+    # 응답 생성
+    raw_answer = generate_answer(prompt)
+    
+    # 후처리를 통한 응답 정제
+    answer = post_process_answer(raw_answer)
     return answer
+
+def create_exaone_pipeline(model, tokenizer):
+    """EXAONE 파이프라인 생성 유틸리티 함수"""
+    return pipeline(
+        "text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        max_new_tokens=500,
+        do_sample=False,
+        num_beams=1,
+        pad_token_id=tokenizer.eos_token_id
+    )
 
 @app.get('/')
 async def get_index():
@@ -213,7 +267,9 @@ async def web_chat(request: Request):
     
     try:
         answer = answer_with_rag(user_query)
-        print(answer)
+        
+        print(f"질문: {user_query}")
+        print(f"응답: {answer}")
 
         # 웹 클라이언트 응답 형식
         return JSONResponse({
@@ -236,6 +292,8 @@ async def startup_event():
         print("초기화 실패. 서버를 시작할 수 없습니다.")
         import sys
         sys.exit(1)
+    else:
+        print("서버 시작 준비 완료! 서버를 실행합니다.")
 
 # 서버 실행
 if __name__ == "__main__":
