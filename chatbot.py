@@ -8,7 +8,7 @@ import httpx
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, pipeline
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification, BitsAndBytesConfig, pipeline
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -32,6 +32,86 @@ pdf_paths = [
 model = None
 tokenizer = None
 vectorstore = None
+filter_model = None
+filter_tokenizer = None
+
+def init_filter_model():
+    """부적절한 콘텐츠 필터링 모델 초기화"""
+    global filter_model, filter_tokenizer
+    
+    print("필터링 모델 초기화 중...")
+    filter_model_name = "beomi/kcbert-base"
+    
+    try:
+        filter_tokenizer = AutoTokenizer.from_pretrained(
+            filter_model_name
+        )
+        
+        filter_model = AutoModelForSequenceClassification.from_pretrained(
+            filter_model_name
+        ).to("cuda" if torch.cuda.is_available() else "cpu")
+        
+        print("필터링 모델 초기화 완료!")
+        return True
+    except Exception as e:
+        print(f"필터링 모델 로드 실패: {e}")
+        print("키워드 기반 필터링만 사용합니다.")
+        filter_model = None
+        filter_tokenizer = None
+        return True  # 모델 없이도 서버는 시작할 수 있도록 True 반환
+
+def is_inappropriate(text: str) -> bool:
+    """텍스트가 부적절한지 확인하는 함수 (욕설, 혐오표현 등 포함 여부 탐지)"""
+    global filter_model, filter_tokenizer
+    
+    # 블랙리스트
+    inappropriate_keywords = [
+        "시발", "씨발", "병신", "개새끼", "좆", "새끼", "지랄", "씹", 
+        "NSFW", "야동", "포르노", "성인물"
+    ]
+    
+    # 화이트리스트
+    policy_keywords = [
+        "복지", "교육", "경제", "환경", "문화", "안전", "국방", "외교", 
+        "일자리", "청년", "노인", "아동", "여성", "장애인", "소득", "세금", 
+        "의료", "주택", "교통", "반려동물", "농업", "어업", "산업"
+    ]
+    
+    # 화이트리스트 확인
+    for keyword in policy_keywords:
+        if keyword in text:
+            print(f"정책 관련 키워드 '{keyword}' 감지됨 - 필터링 통과")
+            return False  # 정책 관련 키워드가 있으면 적절한 것으로 간주
+    
+    # 블랙리스트 확인
+    for keyword in inappropriate_keywords:
+        if keyword in text:
+            print(f"부적절한 키워드 '{keyword}' 감지됨")
+            return True  # 부적절한 키워드가 있으면 부적절한 것으로 간주
+    
+    # 모델 기반 필터링 (모델이 로드된 경우에만)
+    if filter_model and filter_tokenizer:
+        try:
+            inputs = filter_tokenizer(text, return_tensors="pt", truncation=True, max_length=128).to(filter_model.device)
+            
+            with torch.no_grad():
+                outputs = filter_model(**inputs)
+            
+            # 점수 계산 - 기존 모델은 단순 텍스트 분류 모델이므로, 두 번째 클래스(index=1)의 확률을 계산
+            # 이 모델이 부적절한 내용 탐지에 완벽하게 맞지 않을 수 있으므로, 낮은 임계값 적용
+            logits = outputs.logits
+            probabilities = torch.softmax(logits, dim=1)
+            inappropriate_score = probabilities[0][1].item()  # 두 번째 클래스의 확률
+            
+            print(f"텍스트 부적절 점수: {inappropriate_score:.4f}")
+            
+            # 매우 낮은 임계값 적용 (0.3) - 민감한 필터링 피하기
+            return inappropriate_score > 0.3
+        except Exception as e:
+            print(f"모델 필터링 중 오류 발생: {e}")
+            return False  # 오류 발생 시 통과 허용
+    
+    return False
 
 def init_rag_system():
     """RAG 시스템 초기화"""
@@ -252,7 +332,7 @@ async def process_llm_and_callback(user_query: str, callback_url: str):
                     }
                 ]
             }
-            }
+        }
 
         async with httpx.AsyncClient() as client:
             response = await client.post(callback_url, json=callback_res, timeout=60.0)
@@ -285,7 +365,7 @@ async def process_llm_and_callback(user_query: str, callback_url: str):
 
 # 카카오톡 스킬 엔드포인트 수정
 @app.post('/api/chat')
-async def kakao_skill(request: Request, background_tasks: BackgroundTasks): # BackgroundTasks 파라미터 추가
+async def kakao_skill(request: Request, background_tasks: BackgroundTasks):
     print("카카오톡 스킬 요청 수신")
     req = await request.json()
 
@@ -297,30 +377,55 @@ async def kakao_skill(request: Request, background_tasks: BackgroundTasks): # Ba
 
     print(f"사용자 쿼리: {user_query}")
     print(f"Callback URL: {callback_url}")
+    
+    # 필터링 수행
+    if is_inappropriate(user_query):
+        print(f"부적절한 콘텐츠 탐지: '{user_query}'")
+        
+        # 즉시 부적절 응답 반환
+        return JSONResponse(content={
+            "version": "2.0",
+            "template": {
+                "outputs": [
+                    {
+                        "simpleText": {
+                            "text": "죄송합니다. 부적절한 언어나 개인정보가 포함된 질문에는 답변할 수 없습니다."
+                        }
+                    }
+                ]
+            }
+        })
 
+    # 정상 발화면 기존 백그라운드 작업 수행
     background_tasks.add_task(process_llm_and_callback, user_query, callback_url)
 
     print("백그라운드 작업 등록 완료. 즉시 응답 전송.")
 
     # 카카오톡 서버에 5초 이내로 중간 응답을 반환
     immediate_res = {
-        "version" : "2.0",
-        "useCallback" : True
+        "version": "2.0",
+        "useCallback": True
     }
 
     return JSONResponse(content=immediate_res)
 
 @app.on_event("startup")
 async def startup_event():
-    # 모델 및 RAG 시스템 초기화
-    init_success = init_rag_system()
-
-    if not init_success:
-        print("초기화 실패. 서버를 시작할 수 없습니다.")
+    # 필터링 모델 초기화
+    filter_init_success = init_filter_model()
+    if not filter_init_success:
+        print("필터링 모델 초기화 실패!")
         import sys
         sys.exit(1)
-    else:
-        print("서버 시작 준비 완료! 카카오톡 스킬 서버를 실행합니다.")
+    
+    # 모델 및 RAG 시스템 초기화
+    rag_init_success = init_rag_system()
+    if not rag_init_success:
+        print("RAG 시스템 초기화 실패. 서버를 시작할 수 없습니다.")
+        import sys
+        sys.exit(1)
+    
+    print("서버 시작 준비 완료! 카카오톡 스킬 서버를 실행합니다.")
 
 # 서버 실행
 if __name__ == "__main__":
